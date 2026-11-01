@@ -97,6 +97,7 @@
       </div>
       <div style="margin-top:12px"><b>3. Features</b> <span class="note">(numeric columns, at most 15)</span></div>
       <div class="features" id="features"></div>
+      <p class="note" id="text-note" hidden>Struck-through columns contain non-numeric values and cannot be used.</p>
       <div class="row" style="margin-top:14px">
         <button class="primary" id="run" disabled>Run FADO</button>
         <label><input type="checkbox" id="boot"> Uncertainty</label>
@@ -117,6 +118,10 @@
     <h2>Table</h2>
     <div style="overflow-x:auto"><table id="table"></table></div>
     <div class="row" style="margin-top:12px"><button id="download">Download results (CSV)</button></div>
+  </section>
+
+  <section class="panel">
+    <p>Need more than 15 features? Need to deal with categorical variables? See the <a href="https://github.com/MLGlobalHealth/fado-demo">GitHub repository</a>.</p>
   </section>
 
 </main>
@@ -208,6 +213,7 @@
       cb.addEventListener('change', enforceCap);
       lab.append(cb, document.createTextNode(h + (num ? '' : ' (text)'))); box.appendChild(lab);
     }
+    $('text-note').hidden = !header.some(h => h !== out && !isNumeric(h));
     enforceCap();
   }
   function enforceCap() {
