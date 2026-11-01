@@ -99,7 +99,8 @@
       <div class="features" id="features"></div>
       <div class="row" style="margin-top:14px">
         <button class="primary" id="run" disabled>Run FADO</button>
-        <label>Bootstrap replicates <input type="number" id="nboot" value="20" min="0" max="200"></label>
+        <label><input type="checkbox" id="boot"> Uncertainty</label>
+        <label id="nboot-wrap" hidden>replicates <input type="number" id="nboot" value="20" min="1" max="200"></label>
         <button id="cancel" hidden>Stop</button>
       </div>
       <div class="status" id="run-status"></div>
@@ -111,7 +112,7 @@
     <h2 style="margin-top:0">Estimated causal effects</h2>
     <p class="headline" id="headline"></p>
     <div class="chart-wrap"><div id="chart"></div><div class="tip" id="tip"></div></div>
-    <div class="legend"><span><i style="background:var(--pos)"></i>raises the outcome</span><span><i style="background:var(--neg)"></i>lowers the outcome</span><span>whisker: ±2 bootstrap sd</span></div>
+    <div class="legend"><span><i style="background:var(--pos)"></i>raises the outcome</span><span><i style="background:var(--neg)"></i>lowers the outcome</span><span id="whisker-note">whisker: ±2 bootstrap sd</span></div>
     <p class="note">τ̂ is the estimated effect on the outcome, in outcome sd, of a 2-sd shift in the feature. Up to 15 numeric features; at most 512 rows are used.</p>
     <h2>Table</h2>
     <div style="overflow-x:auto"><table id="table"></table></div>
@@ -228,6 +229,7 @@
       complete: res => ingest(res.data, res.meta.fields, 'Sample data (simulated; the true causes are income and dose)') });
   });
   $('outcome').addEventListener('change', renderFeatureBoxes);
+  $('boot').addEventListener('change', () => { $('nboot-wrap').hidden = !$('boot').checked; });
   // ?csv=<same-origin url> preloads a dataset (handy for sharing a demo link).
   const preload = new URLSearchParams(location.search).get('csv');
   if (preload && /^[\w./-]+$/.test(preload)) {
@@ -250,7 +252,7 @@
     const dead = feats.filter((f, j) => stats.sd[j] < 1e-9);
     if (dead.length) { $('run-status').textContent = 'Constant column(s): ' + dead.join(', ') + '. Untick them.'; return; }
     $('run').disabled = true; $('cancel').hidden = false; cancelled = false;
-    const B = Math.max(0, Math.min(200, +$('nboot').value || 0));
+    const B = $('boot').checked ? Math.max(1, Math.min(200, +$('nboot').value || 20)) : 0;
     const prog = k => { $('run-bar').style.width = (100 * k / (B + 1)).toFixed(1) + '%'; };
     $('run-bar-wrap').hidden = false; prog(0.05);
     $('run-status').textContent = `Running on ${n} rows${dropped ? ` (${dropped} dropped for missing values)` : ''}…`;
@@ -267,7 +269,7 @@
       render(); prog(b + 2);
       await new Promise(r => setTimeout(r, 0));
     }
-    prog(B + 1); $('run-status').textContent = `Done: ${n} rows, ${p} features, ${last.boots.length} bootstrap replicates.`;
+    prog(B + 1); $('run-status').textContent = `Done: ${n} rows, ${p} features${last.boots.length ? `, ${last.boots.length} bootstrap replicates` : ''}.`;
     $('run').disabled = false; $('cancel').hidden = true;
     window.__fado_last = last; console.log('FADO result', JSON.stringify(summary()));
   });
@@ -298,11 +300,12 @@
 
   // ---------- render ----------
   const fmt = (v, d = 2) => Number.isFinite(v) ? v.toFixed(d) : '–';
-  const fmtg = v => Number.isFinite(v) ? (Math.abs(v) >= 100 || Math.abs(v) < 0.01 ? v.toPrecision(3) : v.toFixed(3)) : '–';
+  const fmtg = v => { if (!Number.isFinite(v)) return '–'; const a = Math.abs(v); if (a === 0) return '0'; const r = +v.toPrecision(2); return (a >= 1e5 || a < 1e-4) ? r.toExponential(1) : String(r); };
   function render() {
     const S = summary().slice().sort((a, b) => Math.abs(b.tau) - Math.abs(a.tau));
-    const top = S[0];
-    $('headline').innerHTML = top ? `Largest estimated effect: <b>${esc(top.feature)}</b>. Shifting it by two standard deviations (${fmtg(2 * top.sd_x)} units) is estimated to ${top.tau >= 0 ? 'raise' : 'lower'} <b>${esc(top.outcome)}</b> by about ${fmt(Math.abs(top.tau))} sd (${fmtg(Math.abs(top.tau * top.sd_y))} units).` : '';
+    const top = S[0], hasSd = S.some(s => Number.isFinite(s.sd));
+    $('whisker-note').hidden = !hasSd;
+    $('headline').innerHTML = top ? `Largest estimated effect: <b>${esc(top.feature)}</b>. Shifting it by two standard deviations (${fmtg(2 * top.sd_x)} units) is estimated to ${top.tau >= 0 ? 'raise' : 'lower'} <b>${esc(top.outcome)}</b> by about ${fmt(Math.abs(top.tau), 1)} sd (${fmtg(Math.abs(top.tau * top.sd_y))} units).` : '';
     // chart
     const cw = $('chart').clientWidth || 840;
     const W = Math.max(360, Math.min(840, cw)), rowH = 30, left = W < 520 ? 96 : 140, right = 24, topPad = 26, bottom = 28;
@@ -328,14 +331,14 @@
     const tip = $('tip');
     $('chart').querySelectorAll('.hit').forEach(el => {
       el.addEventListener('mousemove', ev => { const s = S[+el.dataset.i];
-        tip.innerHTML = `<b>${esc(s.feature)}</b><br>τ̂ = ${fmt(s.tau, 3)} ${Number.isFinite(s.sd) ? `(bootstrap sd ${fmt(s.sd, 3)})` : ''}<br>≈ ${fmtg(s.slope)} ${esc(s.outcome)} per unit of ${esc(s.feature)}`;
+        tip.innerHTML = `<b>${esc(s.feature)}</b><br>τ̂ = ${fmt(s.tau)} ${Number.isFinite(s.sd) ? `(bootstrap sd ${fmt(s.sd)})` : ''}<br>≈ ${fmtg(s.slope)} ${esc(s.outcome)} per unit of ${esc(s.feature)}`;
         tip.style.display = 'block'; const r = $('chart').getBoundingClientRect();
         tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 270) + 'px'; tip.style.top = (ev.clientY - r.top + 14) + 'px'; });
       el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
     });
     // table
-    $('table').innerHTML = `<tr><th>Feature</th><th>τ̂</th><th>bootstrap sd</th><th>feature sd</th><th>Δ ${esc(last.out)} per unit</th></tr>` +
-      S.map(s => `<tr><td>${esc(s.feature)}</td><td>${fmt(s.tau, 3)}</td><td>${fmt(s.sd, 3)}</td><td>${fmtg(s.sd_x)}</td><td>${fmtg(s.slope)}</td></tr>`).join('');
+    $('table').innerHTML = `<tr><th>Feature</th><th>τ̂</th>${hasSd ? '<th>bootstrap sd</th>' : ''}<th>feature sd</th><th>Δ ${esc(last.out)} per unit</th></tr>` +
+      S.map(s => `<tr><td>${esc(s.feature)}</td><td>${fmt(s.tau)}</td>${hasSd ? `<td>${fmt(s.sd)}</td>` : ''}<td>${fmtg(s.sd_x)}</td><td>${fmtg(s.slope)}</td></tr>`).join('');
   }
   function niceTicks(ext) { const step = [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5].find(s => ext / s <= 4) || 10; const t = []; for (let v = -Math.floor(ext / step) * step; v <= ext + 1e-9; v += step) t.push(+v.toFixed(4)); return t; }
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
