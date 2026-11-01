@@ -204,17 +204,16 @@
       const num = isNumeric(h);
       const lab = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = h;
       if (!num) { cb.disabled = true; lab.className = 'skip'; lab.title = 'not numeric'; }
-      else if (picked < P_PAD) { cb.checked = true; picked++; }
+      else { cb.dataset.num = '1'; if (picked < P_PAD) { cb.checked = true; picked++; } }
       cb.addEventListener('change', enforceCap);
       lab.append(cb, document.createTextNode(h + (num ? '' : ' (text)'))); box.appendChild(lab);
     }
     enforceCap();
   }
   function enforceCap() {
-    const boxes = [...$('features').querySelectorAll('input:not(:disabled)')];
+    const boxes = [...$('features').querySelectorAll('input[data-num]')];
     const n = boxes.filter(b => b.checked).length;
-    for (const b of boxes) if (!b.checked) b.disabled = n >= P_PAD;
-    for (const b of boxes) if (b.disabled && !b.checked) b.parentElement.title = 'at most 15 features';
+    for (const b of boxes) if (!b.checked) { b.disabled = n >= P_PAD; b.parentElement.title = b.disabled ? 'at most 15 features' : ''; }
     maybeEnableRun();
   }
   function selectedFeatures() { return [...$('features').querySelectorAll('input:checked')].map(b => b.value); }
