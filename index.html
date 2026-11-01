@@ -70,13 +70,13 @@
 <body>
 <main>
   <h1>FADO causal explainer</h1>
-  <p class="lead">Drop in a table, name the outcome column, and FADO estimates how much each other column causes the outcome to change. Nothing leaves your browser.</p>
+  <p class="lead">Upload a CSV, choose the outcome column, run. Everything runs in your browser.</p>
 
   <section class="panel" id="model-panel">
     <div class="row">
       <div style="flex:1">
         <div><b>Model</b> <span id="device" class="pill" hidden></span></div>
-        <div class="status" id="model-status">Loading the FADO foundation model (58 MB, once per visit)…</div>
+        <div class="status" id="model-status">Loading model…</div>
         <div class="bar"><div id="model-bar"></div></div>
       </div>
     </div>
@@ -103,6 +103,7 @@
         <button id="cancel" hidden>Stop</button>
       </div>
       <div class="status" id="run-status"></div>
+      <div class="bar" id="run-bar-wrap" hidden><div id="run-bar"></div></div>
     </div>
   </section>
 
@@ -111,20 +112,12 @@
     <p class="headline" id="headline"></p>
     <div class="chart-wrap"><div id="chart"></div><div class="tip" id="tip"></div></div>
     <div class="legend"><span><i style="background:var(--pos)"></i>raises the outcome</span><span><i style="background:var(--neg)"></i>lowers the outcome</span><span>whisker: ±2 bootstrap sd</span></div>
+    <p class="note">τ̂ is the estimated effect on the outcome, in outcome sd, of a 2-sd shift in the feature. Up to 15 numeric features; at most 512 rows are used.</p>
     <h2>Table</h2>
     <div style="overflow-x:auto"><table id="table"></table></div>
     <div class="row" style="margin-top:12px"><button id="download">Download results (CSV)</button></div>
   </section>
 
-  <section class="panel">
-    <h2 style="margin-top:0">How to read this</h2>
-    <ul class="note">
-      <li><b>τ̂</b> is the estimated total causal effect of shifting a feature by two standard deviations (from one sd below its mean to one sd above), measured in standard deviations of the outcome. The table also converts this to raw units.</li>
-      <li>The <b>bootstrap sd</b> measures how much the estimate moves when rows are resampled. A wide whisker means the data do not pin the effect down; this is expected, for example, when everything is close to Gaussian and linear.</li>
-      <li>FADO is a neural network trained on millions of simulated structural causal models. It assumes the included columns form an acyclic causal system with additive noise. It cannot rule out hidden confounding or reverse causation on its own, so read the output as a ranking plus a causal-versus-null call, not as a precise magnitude.</li>
-      <li>Inputs: up to 15 numeric features (encode categories first; 0/1 columns are fine). Rows with missing values are dropped. If there are more than 512 rows, a random 512 are used, matching the model's training size.</li>
-    </ul>
-  </section>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -166,7 +159,7 @@
       if (!session) throw new Error('no execution provider worked');
       $('model-status').textContent = 'Ready.'; $('model-bar').style.width = '100%';
       $('device').textContent = device === 'webgpu' ? 'WebGPU' : 'CPU (WebAssembly)'; $('device').hidden = false;
-      if (device !== 'webgpu') { $('nboot').value = 10; $('model-status').textContent = 'Ready. No WebGPU in this browser, so each pass takes a few seconds on the CPU.'; }
+      if (device !== 'webgpu') $('nboot').value = 10;
       maybeEnableRun();
     } catch (e) { $('model-status').textContent = 'Could not load the model: ' + e.message; console.error(e); }
   }
@@ -232,7 +225,7 @@
   });
   $('sample').addEventListener('click', () => {
     Papa.parse('reference.csv', { download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
-      complete: res => ingest(res.data, res.meta.fields, 'Sample (simulated: income and dose cause the outcome, the rest do not)') });
+      complete: res => ingest(res.data, res.meta.fields, 'Sample data (simulated; the true causes are income and dose)') });
   });
   $('outcome').addEventListener('change', renderFeatureBoxes);
   // ?csv=<same-origin url> preloads a dataset (handy for sharing a demo link).
@@ -257,22 +250,24 @@
     const dead = feats.filter((f, j) => stats.sd[j] < 1e-9);
     if (dead.length) { $('run-status').textContent = 'Constant column(s): ' + dead.join(', ') + '. Untick them.'; return; }
     $('run').disabled = true; $('cancel').hidden = false; cancelled = false;
+    const B = Math.max(0, Math.min(200, +$('nboot').value || 0));
+    const prog = k => { $('run-bar').style.width = (100 * k / (B + 1)).toFixed(1) + '%'; };
+    $('run-bar-wrap').hidden = false; prog(0.05);
     $('run-status').textContent = `Running on ${n} rows${dropped ? ` (${dropped} dropped for missing values)` : ''}…`;
     const t0 = performance.now();
     const point = await fado(...standardize(M, p), n, p, 1);
     const dt = ((performance.now() - t0) / 1000).toFixed(1);
     last = { feats, out, n, p, stats, point: Array.from(point), boots: [] };
-    render(); $('results').hidden = false;
-    const B = Math.max(0, Math.min(200, +$('nboot').value || 0));
+    render(); $('results').hidden = false; prog(1);
     for (let b = 0; b < B && !cancelled; b++) {
-      $('run-status').textContent = `Point estimate in ${dt}s. Bootstrap ${b + 1}/${B}…`;
+      $('run-status').textContent = `Bootstrap ${b + 1}/${B}…`;
       const rb = rng(1000 + b);
       const Mb = new Array(n); for (let i = 0; i < n; i++) Mb[i] = M[rb.int(n)];
       last.boots.push(Array.from(await fado(...standardize(Mb, p), n, p, 1000 + b)));
-      render();
+      render(); prog(b + 2);
       await new Promise(r => setTimeout(r, 0));
     }
-    $('run-status').textContent = `Done: ${n} rows, ${p} features, ${last.boots.length} bootstrap replicates, ${device === 'webgpu' ? 'WebGPU' : 'CPU'}.`;
+    prog(B + 1); $('run-status').textContent = `Done: ${n} rows, ${p} features, ${last.boots.length} bootstrap replicates.`;
     $('run').disabled = false; $('cancel').hidden = true;
     window.__fado_last = last; console.log('FADO result', JSON.stringify(summary()));
   });
