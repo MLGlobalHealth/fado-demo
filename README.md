@@ -57,4 +57,4 @@ open http://127.0.0.1:8791/index.html
 
 Commit this directory to a public repository (the 58 MB model is under GitHub's 100 MB per-file limit; do not put it in Git LFS, Pages does not serve LFS objects) and enable Pages for the branch. No build step.
 
-Live page: https://mlglobalhealth.github.io/fado-demo/
+Live page: https://mlgh.net/fado-demo/
