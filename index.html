@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FADO explainer</title>
+<meta name="description" content="Drop a CSV, pick the outcome column, and get FADO's per-feature causal effect estimates. Runs entirely in your browser.">
+<style>
+  :root {
+    --surface: #fcfcfb; --panel: #ffffff; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --pos: #2a78d6; --neg: #e34948; --accent: #2a78d6;
+    --border: #e1e0d9; --ok: #006300; --warn: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --surface: #1a1a19; --panel: #222221; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --pos: #3987e5; --neg: #e66767; --accent: #3987e5;
+    --border: #2c2c2a; --ok: #0ca30c; --warn: #fab219;
+  } }
+  :root[data-theme="dark"] {
+    --surface: #1a1a19; --panel: #222221; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --pos: #3987e5; --neg: #e66767; --accent: #3987e5;
+    --border: #2c2c2a; --ok: #0ca30c; --warn: #fab219;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p { margin: 6px 0; }
+  .lead { color: var(--text-2); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  label { font-size: 0.95rem; color: var(--text-2); }
+  select, input[type=number] { font: inherit; padding: 6px 8px; border: 1px solid var(--axis); border-radius: 6px; background: var(--panel); color: var(--text); }
+  input[type=number] { width: 5em; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--axis); background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .status { font-size: 0.9rem; color: var(--text-2); min-height: 1.4em; }
+  .bar { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px 12px; margin-top: 8px; font-size: 0.95rem; }
+  .features label { display: flex; gap: 6px; align-items: center; color: var(--text); }
+  .features .skip { color: var(--muted); text-decoration: line-through; }
+  .chart-wrap { position: relative; }
+  svg text { fill: var(--text-2); font-size: 12px; }
+  svg .name { fill: var(--text); font-size: 13px; }
+  svg .grid { stroke: var(--grid); stroke-width: 1; }
+  svg .zero { stroke: var(--axis); stroke-width: 1.5; }
+  svg .whisker { stroke: var(--text-2); stroke-width: 1.5; }
+  svg .hit { fill: transparent; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 0.85rem; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; max-width: 260px; }
+  .tip b { color: var(--text); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; margin-top: 8px; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-2); font-weight: 600; }
+  .note { font-size: 0.9rem; color: var(--text-2); }
+  .note li { margin: 4px 0; }
+  .headline { font-size: 1.05rem; margin: 4px 0 12px; }
+  .pill { display: inline-block; font-size: 0.78rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--axis); color: var(--text-2); margin-left: 6px; }
+  .legend { font-size: 0.85rem; color: var(--text-2); display: flex; gap: 16px; margin: 4px 0 0; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+  a { color: var(--accent); }
+  @media (max-width: 480px) { main { padding: 16px 16px 48px; } h1 { font-size: 1.35rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>FADO causal explainer</h1>
+  <p class="lead">Drop in a table, name the outcome column, and FADO estimates how much each other column causes the outcome to change. Nothing leaves your browser.</p>
+
+  <section class="panel" id="model-panel">
+    <div class="row">
+      <div style="flex:1">
+        <div><b>Model</b> <span id="device" class="pill" hidden></span></div>
+        <div class="status" id="model-status">Loading the FADO foundation model (58 MB, once per visit)…</div>
+        <div class="bar"><div id="model-bar"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <label for="file"><b>1. Data</b></label>
+      <input type="file" id="file" accept=".csv,text/csv">
+      <span class="note">or</span>
+      <button id="sample">Try the sample data</button>
+    </div>
+    <div class="status" id="data-status"></div>
+    <div id="columns" hidden>
+      <div class="row" style="margin-top:12px">
+        <label for="outcome"><b>2. Outcome column</b></label>
+        <select id="outcome"></select>
+      </div>
+      <div style="margin-top:12px"><b>3. Features</b> <span class="note">(numeric columns, at most 15)</span></div>
+      <div class="features" id="features"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="run" disabled>Run FADO</button>
+        <label>Bootstrap replicates <input type="number" id="nboot" value="20" min="0" max="200"></label>
+        <button id="cancel" hidden>Stop</button>
+      </div>
+      <div class="status" id="run-status"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="results" hidden>
+    <h2 style="margin-top:0">Estimated causal effects</h2>
+    <p class="headline" id="headline"></p>
+    <div class="chart-wrap"><div id="chart"></div><div class="tip" id="tip"></div></div>
+    <div class="legend"><span><i style="background:var(--pos)"></i>raises the outcome</span><span><i style="background:var(--neg)"></i>lowers the outcome</span><span>whisker: ±2 bootstrap sd</span></div>
+    <h2>Table</h2>
+    <div style="overflow-x:auto"><table id="table"></table></div>
+    <div class="row" style="margin-top:12px"><button id="download">Download results (CSV)</button></div>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0">How to read this</h2>
+    <ul class="note">
+      <li><b>τ̂</b> is the estimated total causal effect of shifting a feature by two standard deviations (from one sd below its mean to one sd above), measured in standard deviations of the outcome. The table also converts this to raw units.</li>
+      <li>The <b>bootstrap sd</b> measures how much the estimate moves when rows are resampled. A wide whisker means the data do not pin the effect down; this is expected, for example, when everything is close to Gaussian and linear.</li>
+      <li>FADO is a neural network trained on millions of simulated structural causal models. It assumes the included columns form an acyclic causal system with additive noise. It cannot rule out hidden confounding or reverse causation on its own, so read the output as a ranking plus a causal-versus-null call, not as a precise magnitude.</li>
+      <li>Inputs: up to 15 numeric features (encode categories first; 0/1 columns are fine). Rows with missing values are dropped. If there are more than 512 rows, a random 512 are used, matching the model's training size.</li>
+    </ul>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
+<script>
+(() => {
+  const P_PAD = 15, N_MAX = 512;
+  const $ = id => document.getElementById(id);
+
+  // ---------- deterministic RNG (mulberry32 + Box-Muller) ----------
+  function rng(seed) {
+    let a = seed >>> 0;
+    const next = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    let spare = null;
+    const gauss = () => { if (spare !== null) { const s = spare; spare = null; return s; }
+      let u, v, s; do { u = 2 * next() - 1; v = 2 * next() - 1; s = u * u + v * v; } while (s >= 1 || s === 0);
+      const m = Math.sqrt(-2 * Math.log(s) / s); spare = v * m; return u * m; };
+    return { next, gauss, int: n => Math.floor(next() * n) };
+  }
+
+  // ---------- model ----------
+  let session = null, device = null;
+  async function loadModel() {
+    try {
+      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+      ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+      const res = await fetch('fado.onnx');
+      if (!res.ok) throw new Error('fetch ' + res.status);
+      const total = +res.headers.get('content-length') || 57906860;
+      const reader = res.body.getReader(); const chunks = []; let got = 0;
+      for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; $('model-bar').style.width = (100 * got / total).toFixed(1) + '%'; }
+      const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
+      $('model-status').textContent = 'Compiling…';
+      const want = new URLSearchParams(location.search).get('ep');
+      for (const ep of (want ? [want] : ['webgpu', 'wasm'])) {
+        try { session = await ort.InferenceSession.create(buf, { executionProviders: [ep], graphOptimizationLevel: 'all' }); device = ep; break; }
+        catch (e) { console.warn('EP ' + ep + ' failed', e); }
+      }
+      if (!session) throw new Error('no execution provider worked');
+      $('model-status').textContent = 'Ready.'; $('model-bar').style.width = '100%';
+      $('device').textContent = device === 'webgpu' ? 'WebGPU' : 'CPU (WebAssembly)'; $('device').hidden = false;
+      if (device !== 'webgpu') { $('nboot').value = 10; $('model-status').textContent = 'Ready. No WebGPU in this browser, so each pass takes a few seconds on the CPU.'; }
+      maybeEnableRun();
+    } catch (e) { $('model-status').textContent = 'Could not load the model: ' + e.message; console.error(e); }
+  }
+
+  async function fado(Xs, ys, n, p, seed) {
+    // Xs: Float64Array n*p standardized; pad to P_PAD with N(0,1) noise; returns Float32Array(p)
+    const r = rng(seed);
+    const X = new Float32Array(n * P_PAD), y = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < p; j++) X[i * P_PAD + j] = Xs[i * p + j];
+      for (let j = p; j < P_PAD; j++) X[i * P_PAD + j] = r.gauss();
+      y[i] = ys[i];
+    }
+    const out = await session.run({ X: new ort.Tensor('float32', X, [1, n, P_PAD]), y: new ort.Tensor('float32', y, [1, n]) });
+    return out.tau.data.slice(0, p);
+  }
+
+  // ---------- data ----------
+  let rows = null, header = null;
+  function ingest(data, fields, label) {
+    header = fields.filter(f => f && f.trim() !== '');
+    rows = data.filter(r => header.some(h => r[h] !== null && r[h] !== undefined && r[h] !== ''));
+    $('data-status').textContent = `${label}: ${rows.length} rows, ${header.length} columns.`;
+    const numeric = header.filter(h => isNumeric(h));
+    const sel = $('outcome'); sel.innerHTML = '';
+    for (const h of numeric) { const o = document.createElement('option'); o.value = h; o.textContent = h; sel.appendChild(o); }
+    const guess = numeric.find(h => /^(y|outcome|target|label)$/i.test(h)) || numeric[numeric.length - 1];
+    if (guess) sel.value = guess;
+    renderFeatureBoxes(); $('columns').hidden = false; $('results').hidden = true; maybeEnableRun();
+  }
+  function isNumeric(h) {
+    let seen = 0;
+    for (const r of rows) { const v = r[h]; if (v === null || v === undefined || v === '') continue; if (typeof v !== 'number' || !Number.isFinite(v)) return false; seen++; }
+    return seen > 0;
+  }
+  function renderFeatureBoxes() {
+    const out = $('outcome').value, box = $('features'); box.innerHTML = '';
+    let picked = 0;
+    for (const h of header) {
+      if (h === out) continue;
+      const num = isNumeric(h);
+      const lab = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = h;
+      if (!num) { cb.disabled = true; lab.className = 'skip'; lab.title = 'not numeric'; }
+      else if (picked < P_PAD) { cb.checked = true; picked++; }
+      cb.addEventListener('change', enforceCap);
+      lab.append(cb, document.createTextNode(h + (num ? '' : ' (text)'))); box.appendChild(lab);
+    }
+    enforceCap();
+  }
+  function enforceCap() {
+    const boxes = [...$('features').querySelectorAll('input:not(:disabled)')];
+    const n = boxes.filter(b => b.checked).length;
+    for (const b of boxes) if (!b.checked) b.disabled = n >= P_PAD;
+    for (const b of boxes) if (b.disabled && !b.checked) b.parentElement.title = 'at most 15 features';
+    maybeEnableRun();
+  }
+  function selectedFeatures() { return [...$('features').querySelectorAll('input:checked')].map(b => b.value); }
+  function maybeEnableRun() { $('run').disabled = !(session && rows && selectedFeatures().length >= 1); }
+
+  $('file').addEventListener('change', ev => {
+    const f = ev.target.files[0]; if (!f) return;
+    Papa.parse(f, { header: true, dynamicTyping: true, skipEmptyLines: true, complete: res => ingest(res.data, res.meta.fields, f.name) });
+  });
+  $('sample').addEventListener('click', () => {
+    Papa.parse('reference.csv', { download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
+      complete: res => ingest(res.data, res.meta.fields, 'Sample (simulated: income and dose cause the outcome, the rest do not)') });
+  });
+  $('outcome').addEventListener('change', renderFeatureBoxes);
+  // ?csv=<same-origin url> preloads a dataset (handy for sharing a demo link).
+  const preload = new URLSearchParams(location.search).get('csv');
+  if (preload && /^[\w./-]+$/.test(preload)) {
+    Papa.parse(preload, { download: true, header: true, dynamicTyping: true, skipEmptyLines: true, complete: res => ingest(res.data, res.meta.fields, preload) });
+  }
+
+  // ---------- run ----------
+  let cancelled = false, last = null;
+  $('cancel').addEventListener('click', () => { cancelled = true; });
+  $('run').addEventListener('click', async () => {
+    const feats = selectedFeatures(), out = $('outcome').value, p = feats.length;
+    const cols = [...feats, out];
+    let M = rows.map(r => cols.map(c => r[c])).filter(v => v.every(x => typeof x === 'number' && Number.isFinite(x)));
+    const dropped = rows.length - M.length;
+    const r0 = rng(12345);
+    if (M.length > N_MAX) { for (let i = M.length - 1; i > 0; i--) { const j = r0.int(i + 1); [M[i], M[j]] = [M[j], M[i]]; } M = M.slice(0, N_MAX); }
+    const n = M.length;
+    if (n < 20) { $('run-status').textContent = 'Need at least 20 complete rows.'; return; }
+    const stats = colStats(M, p);
+    const dead = feats.filter((f, j) => stats.sd[j] < 1e-9);
+    if (dead.length) { $('run-status').textContent = 'Constant column(s): ' + dead.join(', ') + '. Untick them.'; return; }
+    $('run').disabled = true; $('cancel').hidden = false; cancelled = false;
+    $('run-status').textContent = `Running on ${n} rows${dropped ? ` (${dropped} dropped for missing values)` : ''}…`;
+    const t0 = performance.now();
+    const point = await fado(...standardize(M, p), n, p, 1);
+    const dt = ((performance.now() - t0) / 1000).toFixed(1);
+    last = { feats, out, n, p, stats, point: Array.from(point), boots: [] };
+    render(); $('results').hidden = false;
+    const B = Math.max(0, Math.min(200, +$('nboot').value || 0));
+    for (let b = 0; b < B && !cancelled; b++) {
+      $('run-status').textContent = `Point estimate in ${dt}s. Bootstrap ${b + 1}/${B}…`;
+      const rb = rng(1000 + b);
+      const Mb = new Array(n); for (let i = 0; i < n; i++) Mb[i] = M[rb.int(n)];
+      last.boots.push(Array.from(await fado(...standardize(Mb, p), n, p, 1000 + b)));
+      render();
+      await new Promise(r => setTimeout(r, 0));
+    }
+    $('run-status').textContent = `Done: ${n} rows, ${p} features, ${last.boots.length} bootstrap replicates, ${device === 'webgpu' ? 'WebGPU' : 'CPU'}.`;
+    $('run').disabled = false; $('cancel').hidden = true;
+    window.__fado_last = last; console.log('FADO result', JSON.stringify(summary()));
+  });
+
+  function colStats(M, p) {
+    const k = p + 1, mean = new Float64Array(k), sd = new Float64Array(k), n = M.length;
+    for (const r of M) for (let j = 0; j < k; j++) mean[j] += r[j];
+    for (let j = 0; j < k; j++) mean[j] /= n;
+    for (const r of M) for (let j = 0; j < k; j++) { const d = r[j] - mean[j]; sd[j] += d * d; }
+    for (let j = 0; j < k; j++) sd[j] = Math.sqrt(sd[j] / n);
+    return { mean, sd };
+  }
+  function standardize(M, p) {
+    const { mean, sd } = colStats(M, p), n = M.length;
+    const Xs = new Float64Array(n * p), ys = new Float64Array(n);
+    for (let i = 0; i < n; i++) { for (let j = 0; j < p; j++) Xs[i * p + j] = (M[i][j] - mean[j]) / Math.max(sd[j], 1e-9); ys[i] = (M[i][p] - mean[p]) / Math.max(sd[p], 1e-9); }
+    return [Xs, ys];
+  }
+  function summary() {
+    const { feats, p, point, boots, stats, out } = last;
+    return feats.map((f, j) => {
+      let sd = NaN;
+      if (boots.length >= 2) { const m = boots.reduce((a, b) => a + b[j], 0) / boots.length; sd = Math.sqrt(boots.reduce((a, b) => a + (b[j] - m) ** 2, 0) / (boots.length - 1)); }
+      const slope = point[j] * stats.sd[p] / (2 * stats.sd[j]);           // raw outcome units per raw feature unit
+      return { feature: f, tau: point[j], sd, slope, sd_x: stats.sd[j], sd_y: stats.sd[p], outcome: out };
+    });
+  }
+
+  // ---------- render ----------
+  const fmt = (v, d = 2) => Number.isFinite(v) ? v.toFixed(d) : '–';
+  const fmtg = v => Number.isFinite(v) ? (Math.abs(v) >= 100 || Math.abs(v) < 0.01 ? v.toPrecision(3) : v.toFixed(3)) : '–';
+  function render() {
+    const S = summary().slice().sort((a, b) => Math.abs(b.tau) - Math.abs(a.tau));
+    const top = S[0];
+    $('headline').innerHTML = top ? `Largest estimated effect: <b>${esc(top.feature)}</b>. Shifting it by two standard deviations (${fmtg(2 * top.sd_x)} units) is estimated to ${top.tau >= 0 ? 'raise' : 'lower'} <b>${esc(top.outcome)}</b> by about ${fmt(Math.abs(top.tau))} sd (${fmtg(Math.abs(top.tau * top.sd_y))} units).` : '';
+    // chart
+    const cw = $('chart').clientWidth || 840;
+    const W = Math.max(360, Math.min(840, cw)), rowH = 30, left = W < 520 ? 96 : 140, right = 24, topPad = 26, bottom = 28;
+    const H = topPad + rowH * S.length + bottom;
+    const ext = Math.max(0.1, ...S.map(s => Math.abs(s.tau) + (Number.isFinite(s.sd) ? 2 * s.sd : 0))) * 1.08;
+    const x = v => left + (v + ext) / (2 * ext) * (W - left - right);
+    const ticks = niceTicks(ext);
+    let g = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%;height:auto" role="img" aria-label="Estimated causal effect per feature">`;
+    for (const t of ticks) g += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${topPad - 6}" y2="${H - bottom}"/><text x="${x(t)}" y="${H - 8}" text-anchor="middle">${t}</text>`;
+    g += `<line class="zero" x1="${x(0)}" x2="${x(0)}" y1="${topPad - 6}" y2="${H - bottom}"/>`;
+    g += `<text x="${x(0)}" y="12" text-anchor="middle">τ̂ (outcome sd per 2-sd shift of the feature)</text>`;
+    S.forEach((s, i) => {
+      const yc = topPad + i * rowH + rowH / 2, h = 14;
+      const x0 = x(0), x1 = x(s.tau), bx = Math.min(x0, x1), bw = Math.max(1, Math.abs(x1 - x0));
+      g += `<text class="name" x="${left - 10}" y="${yc + 4}" text-anchor="end">${esc(trunc(s.feature, W < 520 ? 12 : 18))}</text>`;
+      g += `<rect x="${bx}" y="${yc - h / 2}" width="${bw}" height="${h}" rx="3" fill="${s.tau >= 0 ? 'var(--pos)' : 'var(--neg)'}"/>`;
+      if (Number.isFinite(s.sd)) { const a = x(s.tau - 2 * s.sd), b = x(s.tau + 2 * s.sd);
+        g += `<line class="whisker" x1="${a}" x2="${b}" y1="${yc}" y2="${yc}"/><line class="whisker" x1="${a}" x2="${a}" y1="${yc - 5}" y2="${yc + 5}"/><line class="whisker" x1="${b}" x2="${b}" y1="${yc - 5}" y2="${yc + 5}"/>`; }
+      g += `<rect class="hit" data-i="${i}" x="${left}" y="${yc - rowH / 2}" width="${W - left - right}" height="${rowH}"/>`;
+    });
+    g += '</svg>';
+    $('chart').innerHTML = g;
+    const tip = $('tip');
+    $('chart').querySelectorAll('.hit').forEach(el => {
+      el.addEventListener('mousemove', ev => { const s = S[+el.dataset.i];
+        tip.innerHTML = `<b>${esc(s.feature)}</b><br>τ̂ = ${fmt(s.tau, 3)} ${Number.isFinite(s.sd) ? `(bootstrap sd ${fmt(s.sd, 3)})` : ''}<br>≈ ${fmtg(s.slope)} ${esc(s.outcome)} per unit of ${esc(s.feature)}`;
+        tip.style.display = 'block'; const r = $('chart').getBoundingClientRect();
+        tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 270) + 'px'; tip.style.top = (ev.clientY - r.top + 14) + 'px'; });
+      el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    });
+    // table
+    $('table').innerHTML = `<tr><th>Feature</th><th>τ̂</th><th>bootstrap sd</th><th>feature sd</th><th>Δ ${esc(last.out)} per unit</th></tr>` +
+      S.map(s => `<tr><td>${esc(s.feature)}</td><td>${fmt(s.tau, 3)}</td><td>${fmt(s.sd, 3)}</td><td>${fmtg(s.sd_x)}</td><td>${fmtg(s.slope)}</td></tr>`).join('');
+  }
+  function niceTicks(ext) { const step = [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5].find(s => ext / s <= 4) || 10; const t = []; for (let v = -Math.floor(ext / step) * step; v <= ext + 1e-9; v += step) t.push(+v.toFixed(4)); return t; }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const trunc = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+
+  let rsz; addEventListener('resize', () => { if (!last) return; clearTimeout(rsz); rsz = setTimeout(render, 150); });
+
+  $('download').addEventListener('click', () => {
+    const S = summary();
+    const csv = 'feature,tau_hat,bootstrap_sd,feature_sd,outcome_sd,slope_raw_units\n' + S.map(s => [s.feature, s.tau, s.sd, s.sd_x, s.sd_y, s.slope].join(',')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'fado_results.csv'; a.click();
+  });
+
+  window.__fado = { rng, fado, standardize, colStats, get rows() { return rows; } };   // for tests
+  loadModel();
+})();
+</script>
+</body>
+</html>
