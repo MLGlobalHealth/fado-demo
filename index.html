@@ -155,7 +155,7 @@
       if (!res.ok) throw new Error('fetch ' + res.status);
       const total = +res.headers.get('content-length') || 57906860;
       const reader = res.body.getReader(); const chunks = []; let got = 0;
-      for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; $('model-bar').style.width = (100 * got / total).toFixed(1) + '%'; }
+      for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; $('model-bar').style.width = Math.min(100, 100 * got / total).toFixed(1) + '%'; }
       const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
       $('model-status').textContent = 'Compiling…';
       const want = new URLSearchParams(location.search).get('ep');
