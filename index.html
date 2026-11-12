@@ -97,7 +97,7 @@
         <label for="outcome"><b>2. Outcome column</b></label>
         <select id="outcome"></select>
       </div>
-      <div style="margin-top:12px"><b>3. Features</b> <span class="note">(numeric columns, at most 64)</span></div>
+      <div style="margin-top:12px"><b>3. Features</b> <span class="note">(numeric columns, at most 15)</span></div>
       <div class="features" id="features"></div>
       <p class="note" id="text-note" hidden>Struck-through columns contain non-numeric values and cannot be used.</p>
       <div class="row" style="margin-top:14px">
@@ -116,14 +116,14 @@
     <p class="headline" id="headline"></p>
     <div class="chart-wrap"><div id="chart"></div><div class="tip" id="tip"></div></div>
     <div class="legend"><span><i style="background:var(--pos)"></i>raises the outcome</span><span><i style="background:var(--neg)"></i>lowers the outcome</span><span id="whisker-note">whisker: ±2 bootstrap sd</span></div>
-    <p class="note"><span class="hat">τ</span> is the estimated effect on the outcome, in outcome sd, of a 2-sd shift in the feature. Up to 64 numeric features; at most 512 rows are used.</p>
+    <p class="note"><span class="hat">τ</span> is the estimated effect on the outcome, in outcome sd, of a 2-sd shift in the feature. Up to 15 numeric features; at most 512 rows are used.</p>
     <h2>Table</h2>
     <div style="overflow-x:auto"><table id="table"></table></div>
     <div class="row" style="margin-top:12px"><button id="download">Download results (CSV)</button></div>
   </section>
 
   <section class="panel">
-    <p>Need more than 64 features? Need to deal with categorical variables? See the <a href="https://github.com/MLGlobalHealth/fado-demo">GitHub repository</a>.</p>
+    <p>Need more than 15 features? Need to deal with categorical variables? See the <a href="https://github.com/MLGlobalHealth/FADO">GitHub repository</a>.</p>
   </section>
 
 </main>
@@ -132,7 +132,7 @@
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
 <script>
 (() => {
-  const P_MIN = 3, P_MAX = 64, N_MAX = 512;   // model trained on 3..64 columns, no padding
+  const P_PAD = 15, N_MAX = 512;
   const $ = id => document.getElementById(id);
 
   // ---------- deterministic RNG (mulberry32 + Box-Muller) ----------
@@ -154,7 +154,7 @@
       ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
       const res = await fetch('fado.onnx');
       if (!res.ok) throw new Error('fetch ' + res.status);
-      const total = +res.headers.get('content-length') || 57908176;
+      const total = +res.headers.get('content-length') || 57906860;
       const reader = res.body.getReader(); const chunks = []; let got = 0;
       for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; $('model-bar').style.width = Math.min(100, 100 * got / total).toFixed(1) + '%'; }
       const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
@@ -173,16 +173,15 @@
   }
 
   async function fado(Xs, ys, n, p, seed) {
-    // Xs: Float64Array n*p standardized. The model takes any width in [P_MIN, P_MAX] directly;
-    // only p < P_MIN (1 or 2 features) is padded to P_MIN with N(0,1) noise. Returns Float32Array(p).
-    const r = rng(seed), w = Math.max(p, P_MIN);
-    const X = new Float32Array(n * w), y = new Float32Array(n);
+    // Xs: Float64Array n*p standardized; pad to P_PAD with N(0,1) noise; returns Float32Array(p)
+    const r = rng(seed);
+    const X = new Float32Array(n * P_PAD), y = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      for (let j = 0; j < p; j++) X[i * w + j] = Xs[i * p + j];
-      for (let j = p; j < w; j++) X[i * w + j] = r.gauss();
+      for (let j = 0; j < p; j++) X[i * P_PAD + j] = Xs[i * p + j];
+      for (let j = p; j < P_PAD; j++) X[i * P_PAD + j] = r.gauss();
       y[i] = ys[i];
     }
-    const out = await session.run({ X: new ort.Tensor('float32', X, [1, n, w]), y: new ort.Tensor('float32', y, [1, n]) });
+    const out = await session.run({ X: new ort.Tensor('float32', X, [1, n, P_PAD]), y: new ort.Tensor('float32', y, [1, n]) });
     return out.tau.data.slice(0, p);
   }
 
@@ -212,7 +211,7 @@
       const num = isNumeric(h);
       const lab = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = h;
       if (!num) { cb.disabled = true; lab.className = 'skip'; lab.title = 'not numeric'; }
-      else { cb.dataset.num = '1'; if (picked < P_MAX) { cb.checked = true; picked++; } }
+      else { cb.dataset.num = '1'; if (picked < P_PAD) { cb.checked = true; picked++; } }
       cb.addEventListener('change', enforceCap);
       lab.append(cb, document.createTextNode(h + (num ? '' : ' (text)'))); box.appendChild(lab);
     }
@@ -222,7 +221,7 @@
   function enforceCap() {
     const boxes = [...$('features').querySelectorAll('input[data-num]')];
     const n = boxes.filter(b => b.checked).length;
-    for (const b of boxes) if (!b.checked) { b.disabled = n >= P_MAX; b.parentElement.title = b.disabled ? 'at most 64 features' : ''; }
+    for (const b of boxes) if (!b.checked) { b.disabled = n >= P_PAD; b.parentElement.title = b.disabled ? 'at most 15 features' : ''; }
     maybeEnableRun();
   }
   function selectedFeatures() { return [...$('features').querySelectorAll('input:checked')].map(b => b.value); }
